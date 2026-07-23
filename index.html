@@ -968,10 +968,13 @@ function renderSummaryTable() {
   names.forEach(n => {
     const dd = driverData[n];
     let p=0,f=0,t=0,riposo=0,malattia=0,ferie=0;
-    Object.values(dd.days).forEach(d => {
+    const _holidays1 = getItalianHolidays(targetYear);
+    Object.entries(dd.days).forEach(([k, d]) => {
+      const _d = new Date(k);
+      const _isSunOrFest = _d.getDay() === 0 || _holidays1.has(k);
       if (d.presente) p++;
       if (d.flix) f++;
-      if (d.trasferta) t++;
+      if (d.trasferta) t += (_isSunOrFest ? 2 : 1);
       if (d.assenza === 'Riposo settimanale') riposo++;
       else if (d.assenza === 'Malattia') malattia++;
       else if (d.assenza === 'Ferie annuali') ferie++;
@@ -1103,8 +1106,12 @@ function generateDriverPDF(doc, name, startY) {
 
   // Summary
   let p=0,f=0,t=0,riposo=0,malattia=0,ferie=0;
-  Object.values(dd.days).forEach(d => {
-    if (d.presente) p++; if (d.flix) f++; if (d.trasferta) t++;
+  const _holidays2 = getItalianHolidays(targetYear);
+  Object.entries(dd.days).forEach(([k, d]) => {
+    const _d2 = new Date(k);
+    const _isSunOrFest2 = _d2.getDay() === 0 || _holidays2.has(k);
+    if (d.presente) p++; if (d.flix) f++;
+    if (d.trasferta) t += (_isSunOrFest2 ? 2 : 1);
     if (d.assenza==='Riposo settimanale') riposo++;
     else if (d.assenza==='Malattia') malattia++;
     else if (d.assenza==='Ferie annuali') ferie++;
@@ -1116,7 +1123,8 @@ function generateDriverPDF(doc, name, startY) {
   doc.text(`Presente: ${p}   FLIXBUS: ${f}   Trasferta: ${t}   Riposo settimanale: ${riposo}   Malattia: ${malattia}   Ferie: ${ferie}`, 14, y + 10);
   doc.text(`Permesso retribuito: ${dd.permessoTotal || 0}h   ROL: ${dd.rolTotal || 0}h`, 14, y + 16);
   doc.setFontSize(7.5); doc.setTextColor(185,31,122); doc.setFont(undefined,'italic');
-  doc.text('★ Domeniche e festivi evidenziati in rosa: le trasferte di questi giorni vengono retribuite con tariffa doppia.', 14, y + 23);
+  doc.text('★ Domeniche e festivi evidenziati in rosa:', 14, y + 23);
+  doc.text('  le trasferte di questi giorni vengono retribuite con tariffa doppia.', 14, y + 28);
   doc.setFont(undefined,'normal');
   return y + 32;
 }
