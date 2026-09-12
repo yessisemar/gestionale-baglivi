@@ -327,92 +327,63 @@ uploadZone.addEventListener('drop', (e) => {
 });
 
 // ---------- Storage (saved months, shared in this browser) ----------
-const SUPABASE_URL = 'https://jplqasifcwkrlhiuyylx.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpwbHFhc2lmY3drcmxoaXV5eWx4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3OTQxNTcsImV4cCI6MjEwMDM3MDE1N30.vrT80VyVAhHQYObHXHY-3UvAqzI7DS1uCqopj1GUquA';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwtUtN2PKAFzGetxoAOvDH9qiVR3PMKB33i9rQ1lPsJv9cMM9PhbNmqNYHfXB_S0ZGNJQ/exec';
+const STORAGE_KEY = 'baglivi_gestionale_mesi';
 
-// ---------- Storage — Supabase (cloud, sincronizzato su tutti i dispositivi) ----------
+// ---------- Storage — Google Sheets (shared) + localStorage (cache) ----------
 async function getSavedMonths() {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/gestionale_mesi?select=mese_key,data`, {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
-      }
-    });
-    if (!res.ok) throw new Error('Supabase read error');
-    const rows = await res.json();
-    const result = {};
-    rows.forEach(r => { result[r.mese_key] = r.data; });
-    return result;
-  } catch(e) {
-    console.warn('Supabase read failed:', e);
-    return {};
-  }
+    const res = await fetch(`${SCRIPT_URL}?key=${STORAGE_KEY}`);
+    const data = await res.json();
+    if (data.value) {
+      const parsed = JSON.parse(data.value);
+      localStorage.setItem(STORAGE_KEY, data.value); // cache locally
+      return parsed;
+    }
+  } catch(e) { console.warn('Google Sheets read failed, using local cache', e); }
+  // fallback to local cache
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch(e) { return {}; }
 }
 
-async function saveSavedMonths(allData) {
-  // saveSavedMonths is called with full data object - we save each month individually
-  // This is called from saveCurrentMonth which passes the full object
-  // We handle individual saves in saveCurrentMonth instead
+async function saveSavedMonths(data) {
+  const json = JSON.stringify(data);
+  localStorage.setItem(STORAGE_KEY, json); // always save locally first
+  try {
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      body: JSON.stringify({ key: STORAGE_KEY, value: json })
+    });
+  } catch(e) { console.warn('Google Sheets write failed, saved locally only', e); }
 }
 
 async function saveCurrentMonth() {
   if (targetMonth === null || targetYear === null) return;
   const key = `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}`;
-  const payload = { year: targetYear, month: targetMonth, driverData, conflicts, savedAt: new Date().toISOString() };
-  try {
-    // Try upsert (insert or update)
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/gestionale_mesi`, {
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify({ mese_key: key, data: payload, aggiornato_il: new Date().toISOString() })
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      console.error('Supabase save error:', err);
-    }
-  } catch(e) { console.error('Supabase save failed:', e); }
+  const all = await getSavedMonths();
+  all[key] = { year: targetYear, month: targetMonth, driverData, conflicts, savedAt: new Date().toISOString() };
+  await saveSavedMonths(all);
 }
 
 async function loadMonth(key) {
   showLoadingOverlay('Caricamento mese...');
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/gestionale_mesi?mese_key=eq.${key}&select=data`, {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
-      }
-    });
-    const rows = await res.json();
-    hideLoadingOverlay();
-    if (!rows || rows.length === 0) return;
-    const entry = rows[0].data;
-    targetYear = entry.year; targetMonth = entry.month;
-    driverData = entry.driverData; conflicts = entry.conflicts || [];
-    currentDriver = null;
-    showAppScreen();
-    renderApp();
-  } catch(e) {
-    hideLoadingOverlay();
-    console.error('Supabase load failed:', e);
-  }
+  const all = await getSavedMonths();
+  hideLoadingOverlay();
+  const entry = all[key];
+  if (!entry) return;
+  targetYear = entry.year; targetMonth = entry.month;
+  driverData = entry.driverData; conflicts = entry.conflicts || [];
+  currentDriver = null;
+  showAppScreen();
+  renderApp();
 }
 
 async function deleteMonth(key) {
-  try {
-    await fetch(`${SUPABASE_URL}/rest/v1/gestionale_mesi?mese_key=eq.${key}`, {
-      method: 'DELETE',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
-      }
-    });
-  } catch(e) { console.error('Supabase delete failed:', e); }
+  const all = await getSavedMonths();
+  delete all[key];
+  await saveSavedMonths(all);
   renderHomeScreen();
 }
 
@@ -509,8 +480,12 @@ function processData() {
       const fine = parseItalianDate(r['Data di fine']) || inizio;
       if (!inizio) return;
 
-      if (tipo.startsWith('Assenza')) {
-        const label = tipo.replace('Assenza (', '').replace(')', '');
+      if (tipo.startsWith('Assenza') || tipo === 'Altra attività') {
+        const descrizione = (r['Descrizione'] || '').toString().trim();
+        const isAltra = tipo.includes('Altra attività');
+        const label = isAltra && descrizione
+          ? `Altra attività: ${descrizione}`
+          : tipo.replace('Assenza (', '').replace(')', '');
         let cur = new Date(inizio.getFullYear(), inizio.getMonth(), inizio.getDate());
         const end = new Date(fine.getFullYear(), fine.getMonth(), fine.getDate());
         while (cur <= end) {
@@ -997,13 +972,10 @@ function renderSummaryTable() {
   names.forEach(n => {
     const dd = driverData[n];
     let p=0,f=0,t=0,riposo=0,malattia=0,ferie=0;
-    const _holidays1 = getItalianHolidays(targetYear);
-    Object.entries(dd.days).forEach(([k, d]) => {
-      const _d = new Date(k);
-      const _isSunOrFest = _d.getDay() === 0 || _holidays1.has(k);
+    Object.values(dd.days).forEach(d => {
       if (d.presente) p++;
       if (d.flix) f++;
-      if (d.trasferta) t += (_isSunOrFest ? 2 : 1);
+      if (d.trasferta) t++;
       if (d.assenza === 'Riposo settimanale') riposo++;
       else if (d.assenza === 'Malattia') malattia++;
       else if (d.assenza === 'Ferie annuali') ferie++;
@@ -1111,7 +1083,6 @@ function generateDriverPDF(doc, name, startY) {
     if (info) {
       const lines = dayLabelLines(info);
       let ly = yy + 9.5;
-      doc.setFontSize(5.6);
       lines.slice(0, 3).forEach(l => {
         let rgb = [70,65,60];
         if (l.cls === 'lbl-presente') rgb = [41,53,96];
@@ -1121,8 +1092,22 @@ function generateDriverPDF(doc, name, startY) {
         else if (l.cls === 'lbl-rol') rgb = [138,74,26];
         else if (l.cls === 'lbl-assenza') rgb = [85,85,110];
         doc.setTextColor(...rgb);
-        const txt = l.text.length > 15 ? l.text.substring(0,14)+'.' : l.text;
-        doc.text(txt, x + 2, ly);
+        // For long text (Altra attività) use smaller font and wrap in 2 lines
+        if (l.text.length > 15) {
+          doc.setFontSize(4.2);
+          const words = l.text.split(' ');
+          let line1 = '', line2 = '';
+          for (const w of words) {
+            if ((line1 + ' ' + w).trim().length <= 20) line1 = (line1 + ' ' + w).trim();
+            else line2 = (line2 + ' ' + w).trim();
+          }
+          doc.text(line1, x + 2, ly);
+          if (line2) { doc.text(line2, x + 2, ly + 3); ly += 3; }
+          doc.setFontSize(5.6);
+        } else {
+          doc.setFontSize(5.6);
+          doc.text(l.text, x + 2, ly);
+        }
         ly += 3.2;
       });
     }
@@ -1135,12 +1120,8 @@ function generateDriverPDF(doc, name, startY) {
 
   // Summary
   let p=0,f=0,t=0,riposo=0,malattia=0,ferie=0;
-  const _holidays2 = getItalianHolidays(targetYear);
-  Object.entries(dd.days).forEach(([k, d]) => {
-    const _d2 = new Date(k);
-    const _isSunOrFest2 = _d2.getDay() === 0 || _holidays2.has(k);
-    if (d.presente) p++; if (d.flix) f++;
-    if (d.trasferta) t += (_isSunOrFest2 ? 2 : 1);
+  Object.values(dd.days).forEach(d => {
+    if (d.presente) p++; if (d.flix) f++; if (d.trasferta) t++;
     if (d.assenza==='Riposo settimanale') riposo++;
     else if (d.assenza==='Malattia') malattia++;
     else if (d.assenza==='Ferie annuali') ferie++;
@@ -1152,8 +1133,7 @@ function generateDriverPDF(doc, name, startY) {
   doc.text(`Presente: ${p}   FLIXBUS: ${f}   Trasferta: ${t}   Riposo settimanale: ${riposo}   Malattia: ${malattia}   Ferie: ${ferie}`, 14, y + 10);
   doc.text(`Permesso retribuito: ${dd.permessoTotal || 0}h   ROL: ${dd.rolTotal || 0}h`, 14, y + 16);
   doc.setFontSize(7.5); doc.setTextColor(185,31,122); doc.setFont(undefined,'italic');
-  doc.text('★ Domeniche e festivi evidenziati in rosa:', 14, y + 23);
-  doc.text('  le trasferte di questi giorni vengono retribuite con tariffa doppia.', 14, y + 28);
+  doc.text('★ Domeniche e festivi evidenziati in rosa: le trasferte di questi giorni vengono retribuite con tariffa doppia.', 14, y + 23);
   doc.setFont(undefined,'normal');
   return y + 32;
 }
