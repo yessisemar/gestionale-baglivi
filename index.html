@@ -333,15 +333,15 @@ const STORAGE_KEY = 'baglivi_gestionale_mesi';
 // ---------- Storage — Google Sheets (shared) + localStorage (cache) ----------
 async function getSavedMonths() {
   try {
-    const res = await fetch(`${SCRIPT_URL}?key=${STORAGE_KEY}`);
-    const data = await res.json();
+    const res = await fetch(`${SCRIPT_URL}?key=${STORAGE_KEY}`, { method: 'GET' });
+    const text = await res.text();
+    const data = JSON.parse(text);
     if (data.value) {
       const parsed = JSON.parse(data.value);
-      localStorage.setItem(STORAGE_KEY, data.value); // cache locally
+      localStorage.setItem(STORAGE_KEY, data.value);
       return parsed;
     }
   } catch(e) { console.warn('Google Sheets read failed, using local cache', e); }
-  // fallback to local cache
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : {};
@@ -350,11 +350,12 @@ async function getSavedMonths() {
 
 async function saveSavedMonths(data) {
   const json = JSON.stringify(data);
-  localStorage.setItem(STORAGE_KEY, json); // always save locally first
+  localStorage.setItem(STORAGE_KEY, json);
   try {
-    await fetch(SCRIPT_URL, {
-      method: 'POST',
-      body: JSON.stringify({ key: STORAGE_KEY, value: json })
+    const params = new URLSearchParams({ key: STORAGE_KEY, value: json });
+    await fetch(`${SCRIPT_URL}?${params.toString()}`, {
+      method: 'GET',
+      mode: 'no-cors'
     });
   } catch(e) { console.warn('Google Sheets write failed, saved locally only', e); }
 }
