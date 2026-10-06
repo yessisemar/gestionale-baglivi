@@ -331,17 +331,42 @@ const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz77ZaX0AQgvBuB-OYmn
 const STORAGE_KEY = 'baglivi_gestionale_mesi';
 
 // ---------- Storage — Google Sheets (shared) + localStorage (cache) ----------
-async function getSavedMonths() {
+async function gsGet(key) {
   try {
-    const res = await fetch(`${SCRIPT_URL}?key=${STORAGE_KEY}`, { method: 'GET' });
+    const res = await fetch(`${SCRIPT_URL}?key=${encodeURIComponent(key)}`);
     const text = await res.text();
     const data = JSON.parse(text);
-    if (data.value) {
-      const parsed = JSON.parse(data.value);
-      localStorage.setItem(STORAGE_KEY, data.value);
-      return parsed;
+    return data.value || null;
+  } catch(e) { return null; }
+}
+
+async function gsSet(key, value) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ key, value })
+    });
+  } catch(e) { console.warn('GS write failed', e); }
+}
+
+async function getSavedMonths() {
+  // Try to get index of months from Google Sheets
+  try {
+    const indexRaw = await gsGet('baglivi_index');
+    if (indexRaw) {
+      const keys = JSON.parse(indexRaw);
+      const result = {};
+      for (const k of keys) {
+        const local = localStorage.getItem('baglivi_' + k);
+        if (local) { result[k] = JSON.parse(local); continue; }
+        const val = await gsGet('baglivi_' + k);
+        if (val) { result[k] = JSON.parse(val); localStorage.setItem('baglivi_' + k, val); }
+      }
+      return result;
     }
-  } catch(e) { console.warn('Google Sheets read failed, using local cache', e); }
+  } catch(e) { console.warn('GS read failed', e); }
+  // Fallback to localStorage
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : {};
@@ -349,15 +374,18 @@ async function getSavedMonths() {
 }
 
 async function saveSavedMonths(data) {
-  const json = JSON.stringify(data);
-  localStorage.setItem(STORAGE_KEY, json);
+  // Save locally first
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  // Save each month separately to Google Sheets (smaller payloads)
   try {
-    const params = new URLSearchParams({ key: STORAGE_KEY, value: json });
-    await fetch(`${SCRIPT_URL}?${params.toString()}`, {
-      method: 'GET',
-      mode: 'no-cors'
-    });
-  } catch(e) { console.warn('Google Sheets write failed, saved locally only', e); }
+    const keys = Object.keys(data);
+    await gsSet('baglivi_index', JSON.stringify(keys));
+    for (const k of keys) {
+      const monthJson = JSON.stringify(data[k]);
+      localStorage.setItem('baglivi_' + k, monthJson);
+      await gsSet('baglivi_' + k, monthJson);
+    }
+  } catch(e) { console.warn('GS save failed', e); }
 }
 
 async function saveCurrentMonth() {
