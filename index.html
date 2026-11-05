@@ -113,6 +113,8 @@
   .cal-day .lbl-rol { color: #8a4a1a; }
   .cal-day .lbl-flixbus { color: #293560; font-weight: 800; }
   .cal-day .lbl-trasferta { color: #6a3a9a; }
+  .cal-day .lbl-spinta { color: #0f7a6b; font-weight: 700; }
+  .pill-spinta { background: #dff3ef; color: #0f7a6b; }
 
   /* Sunday & Festivo — magenta brand highlight */
   .cal-day.is-sunday { background: #fce8f3 !important; border: 1.5px solid var(--magenta) !important; }
@@ -222,6 +224,7 @@
             <option value="">Tutti gli stati</option>
             <option value="flix">Con giorni FLIXBUS</option>
             <option value="trasferta">Con giorni Trasferta</option>
+            <option value="spinta">Con giorni SPINTA</option>
             <option value="riposo">Con Riposo settimanale</option>
             <option value="ferie">Con Ferie annuali</option>
             <option value="malattia">Con Malattia</option>
@@ -243,6 +246,7 @@
           <span><span class="sw" style="background:#e8f0e9"></span> Presente</span>
           <span><span class="sw" style="background:#e3e9f7"></span> FLIXBUS</span>
           <span><span class="sw" style="background:#ede3f5"></span> Trasferta</span>
+          <span><span class="sw" style="background:#dff3ef"></span> SPINTA</span>
           <span><span class="sw" style="background:#f0eee9"></span> Assenza</span>
           <span><span class="sw" style="background:#fae8e3"></span> Permesso retribuito / ROL</span>
           <span><span class="sw" style="background:white; border:1.5px solid var(--magenta)"></span> Modificato manualmente</span>
@@ -299,7 +303,20 @@ function parseItalianDate(str) {
 }
 function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
-function emptyDay() { return { presente: false, flix: false, trasferta: false, assenza: null, recupero: false, manual: false }; }
+// Trasferta: domenica e festivi nazionali contano doppio
+function trasfertaCount(dd) {
+  let n = 0;
+  const hol = {};
+  Object.entries(dd.days).forEach(([k, d]) => {
+    if (!d.trasferta) return;
+    const [y, m, dy] = k.split('-').map(Number);
+    if (!hol[y]) hol[y] = getItalianHolidays(y);
+    const doppio = new Date(y, m - 1, dy).getDay() === 0 || hol[y].has(k);
+    n += doppio ? 2 : 1;
+  });
+  return n;
+}
+function emptyDay() { return { presente: false, flix: false, trasferta: false, spinta: false, assenza: null, recupero: false, manual: false }; }
 function normalizeName(raw) {
   return raw.toLowerCase().split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
@@ -505,6 +522,8 @@ function processData() {
       const titolo = (r['Titolo'] || '').toString().trim().toUpperCase();
       const isFlix = cliente === 'FLIXBUS';
       const isTrasferta = titolo === 'TRASFERTA';
+      const codiceKey = Object.keys(r).find(k => { const n = k.toString().trim().toLowerCase(); return n.includes('codice') && n.includes('aggiuntivo'); });
+      const isSpinta = codiceKey ? (r[codiceKey] || '').toString().toUpperCase().includes('SPINTA') : false;
       const inizio = parseItalianDate(r['Data di inizio']);
       const fine = parseItalianDate(r['Data di fine']) || inizio;
       if (!inizio) return;
@@ -539,12 +558,13 @@ function processData() {
             if (day.assenza && !day.presente) {
               if (!day._conflictFlagged) {
                 day._conflictFlagged = true;
-                conflicts.push({ driver: name, dateKey: k, absenceLabel: day.assenza, isFlix, isTrasferta, resolved: false, choice: null });
+                conflicts.push({ driver: name, dateKey: k, absenceLabel: day.assenza, isFlix, isTrasferta, isSpinta, resolved: false, choice: null });
               }
             } else {
               day.presente = true;
               if (isFlix) day.flix = true;
               if (isTrasferta) day.trasferta = true;
+              if (isSpinta) day.spinta = true;
             }
           }
           cur = addDays(cur, 1);
@@ -566,15 +586,16 @@ function applyConflictChoice(idx, choice) {
     if (input === null) return; // user cancelled
     const hours = parseFloat(input.replace(',', '.'));
     if (isNaN(hours) || hours < 0) { alert('Inserisci un numero valido di ore.'); return; }
-    day.presente = false; day.flix = false; day.trasferta = false;
+    day.presente = false; day.flix = false; day.trasferta = false; day.spinta = false;
     day.assenza = null; day.recupero = true; day.recuperoHours = hours;
     dd.permessoTotal = (dd.permessoTotal || 0) + hours;
   } else if (choice === 'presente') {
     day.presente = true; day.assenza = null; day.recupero = false;
     if (c.isFlix) day.flix = true;
     if (c.isTrasferta) day.trasferta = true;
+    if (c.isSpinta) day.spinta = true;
   } else if (choice === 'assenza') {
-    day.presente = false; day.flix = false; day.trasferta = false;
+    day.presente = false; day.flix = false; day.trasferta = false; day.spinta = false;
     day.recupero = false; day.assenza = c.absenceLabel;
   }
   c.resolved = true; c.choice = choice;
@@ -605,6 +626,10 @@ function openDayEditor(driverName, k) {
       <div class="check-row">
         <input type="checkbox" id="ed-trasferta" ${day.trasferta ? 'checked' : ''}>
         <label for="ed-trasferta">Trasferta</label>
+      </div>
+      <div class="check-row">
+        <input type="checkbox" id="ed-spinta" ${day.spinta ? 'checked' : ''}>
+        <label for="ed-spinta">SPINTA</label>
       </div>
       <div class="check-row">
         <input type="checkbox" id="ed-recupero" ${day.recupero ? 'checked' : ''}>
@@ -645,6 +670,7 @@ function saveDayEdit(driverName, k) {
   day.presente = document.getElementById('ed-presente').checked;
   day.flix = document.getElementById('ed-flix').checked;
   day.trasferta = document.getElementById('ed-trasferta').checked;
+  day.spinta = document.getElementById('ed-spinta').checked;
   const nowRecupero = document.getElementById('ed-recupero').checked;
   const newRecuperoHours = parseFloat(document.getElementById('ed-recupero-ore').value) || 0;
   const nowRol = document.getElementById('ed-rol').checked;
@@ -672,6 +698,7 @@ function dayLabelLines(day) {
   if (day.presente) lines.push({ cls: 'lbl-presente', text: 'Presente' });
   if (day.flix) lines.push({ cls: 'lbl-flixbus', text: 'FLIXBUS' });
   if (day.trasferta) lines.push({ cls: 'lbl-trasferta', text: 'Trasferta' });
+  if (day.spinta) lines.push({ cls: 'lbl-spinta', text: 'SPINTA' });
   if (day.recupero) lines.push({ cls: 'lbl-recupero', text: `Permesso retribuito (${day.recuperoHours != null ? day.recuperoHours : 2}h)` });
   if (day.rol) lines.push({ cls: 'lbl-rol', text: `ROL (${day.rolHours != null ? day.rolHours : 2}h)` });
   if (day.assenza) lines.push({ cls: 'lbl-assenza', text: day.assenza });
@@ -719,15 +746,16 @@ async function renderApp() {
 
 function renderStats() {
   const names = Object.keys(driverData);
-  let totPresente = 0, totFlix = 0, totTrasferta = 0, totAssenza = 0, totRol = 0, totPermesso = 0;
+  let totPresente = 0, totFlix = 0, totTrasferta = 0, totSpinta = 0, totAssenza = 0, totRol = 0, totPermesso = 0;
   names.forEach(n => {
     const dd = driverData[n];
     Object.values(dd.days).forEach(d => {
       if (d.presente) totPresente++;
       if (d.flix) totFlix++;
-      if (d.trasferta) totTrasferta++;
+      if (d.spinta) totSpinta++;
       if (d.assenza) totAssenza++;
     });
+    totTrasferta += trasfertaCount(dd);
     totRol += dd.rolTotal || 0;
     totPermesso += dd.permessoTotal || 0;
   });
@@ -738,7 +766,8 @@ function renderStats() {
     <div class="stat"><div class="num">${names.length}</div><div class="label">Autisti</div></div>
     <div class="stat"><div class="num">${totPresente}</div><div class="label">Giorni presente</div></div>
     <div class="stat"><div class="num">${totFlix}</div><div class="label">Giorni FLIXBUS</div></div>
-    <div class="stat"><div class="num">${totTrasferta}</div><div class="label">Giorni Trasferta</div></div>
+    <div class="stat"><div class="num">${totTrasferta}</div><div class="label">Giorni Trasferta (dom/festivi x2)</div></div>
+    <div class="stat"><div class="num">${totSpinta}</div><div class="label">Giorni SPINTA</div></div>
     <div class="stat"><div class="num">${totAssenza}</div><div class="label">Giorni assenza</div></div>
     <div class="stat"><div class="num">${totPermesso}h</div><div class="label">Permesso retribuito</div></div>
     <div class="stat"><div class="num">${totRol}h</div><div class="label">ROL accumulato</div></div>
@@ -848,6 +877,7 @@ function renderDriverGrid() {
       return Object.values(dd.days).some(d => {
         if (statusFilter === 'flix') return d.flix;
         if (statusFilter === 'trasferta') return d.trasferta;
+        if (statusFilter === 'spinta') return d.spinta;
         if (statusFilter === 'riposo') return d.assenza === 'Riposo settimanale';
         if (statusFilter === 'ferie') return d.assenza === 'Ferie annuali';
         if (statusFilter === 'malattia') return d.assenza === 'Malattia';
@@ -865,14 +895,15 @@ function renderDriverGrid() {
 
   grid.innerHTML = names.map(n => {
     const dd = driverData[n];
-    let p=0,f=0,t=0,a=0;
-    Object.values(dd.days).forEach(d => { if(d.presente) p++; if(d.flix) f++; if(d.trasferta) t++; if(d.assenza) a++; });
+    let p=0,f=0,t=trasfertaCount(dd),a=0,sp=0;
+    Object.values(dd.days).forEach(d => { if(d.presente) p++; if(d.flix) f++; if(d.spinta) sp++; if(d.assenza) a++; });
     return `<div class="driver-card ${currentDriver===n?'active':''}" onclick="selectDriver('${n.replace(/'/g,"\\'")}')">
       <div class="name">${n}</div>
       <div class="mini-stats">
         <span class="pill pill-presente">${p}P</span>
         <span class="pill pill-flixbus">${f}F</span>
         <span class="pill pill-trasferta">${t}T</span>
+        <span class="pill pill-spinta">${sp}S</span>
         <span class="pill pill-assenza">${a}A</span>
         ${dd.permessoTotal ? `<span class="pill pill-rol">${dd.permessoTotal}h Perm.</span>` : ''}
         ${dd.rolTotal ? `<span class="pill pill-rol">${dd.rolTotal}h ROL</span>` : ''}
@@ -995,22 +1026,22 @@ function renderCalendar(name) {
 function renderSummaryTable() {
   const names = Object.keys(driverData).sort();
   let html = `<thead><tr>
-    <th>Autista</th><th>Presente</th><th>FLIXBUS</th><th>Trasferta</th>
+    <th>Autista</th><th>Presente</th><th>FLIXBUS</th><th>Trasferta</th><th>SPINTA</th>
     <th>Riposo sett.</th><th>Malattia</th><th>Ferie</th><th>Permesso retr.</th><th>ROL</th>
   </tr></thead><tbody>`;
   names.forEach(n => {
     const dd = driverData[n];
-    let p=0,f=0,t=0,riposo=0,malattia=0,ferie=0;
+    let p=0,f=0,t=trasfertaCount(dd),sp=0,riposo=0,malattia=0,ferie=0;
     Object.values(dd.days).forEach(d => {
       if (d.presente) p++;
       if (d.flix) f++;
-      if (d.trasferta) t++;
+      if (d.spinta) sp++;
       if (d.assenza === 'Riposo settimanale') riposo++;
       else if (d.assenza === 'Malattia') malattia++;
       else if (d.assenza === 'Ferie annuali') ferie++;
     });
     html += `<tr>
-      <td><strong>${n}</strong></td><td>${p}</td><td>${f}</td><td>${t}</td>
+      <td><strong>${n}</strong></td><td>${p}</td><td>${f}</td><td>${t}</td><td>${sp}</td>
       <td>${riposo}</td><td>${malattia}</td><td>${ferie}</td><td>${dd.permessoTotal ? dd.permessoTotal + 'h' : '—'}</td>
       <td>${dd.rolTotal ? dd.rolTotal + 'h' : '—'}</td>
     </tr>`;
@@ -1117,6 +1148,7 @@ function generateDriverPDF(doc, name, startY) {
         if (l.cls === 'lbl-presente') rgb = [41,53,96];
         else if (l.cls === 'lbl-flixbus') rgb = [41,53,96];
         else if (l.cls === 'lbl-trasferta') rgb = [106,50,160];
+        else if (l.cls === 'lbl-spinta') rgb = [15,122,107];
         else if (l.cls === 'lbl-recupero') rgb = [176,80,16];
         else if (l.cls === 'lbl-rol') rgb = [138,74,26];
         else if (l.cls === 'lbl-assenza') rgb = [85,85,110];
@@ -1148,9 +1180,9 @@ function generateDriverPDF(doc, name, startY) {
   y = gridStartY + totalRows * rowH + 8;
 
   // Summary
-  let p=0,f=0,t=0,riposo=0,malattia=0,ferie=0;
+  let p=0,f=0,t=trasfertaCount(dd),sp=0,riposo=0,malattia=0,ferie=0;
   Object.values(dd.days).forEach(d => {
-    if (d.presente) p++; if (d.flix) f++; if (d.trasferta) t++;
+    if (d.presente) p++; if (d.flix) f++; if (d.spinta) sp++;
     if (d.assenza==='Riposo settimanale') riposo++;
     else if (d.assenza==='Malattia') malattia++;
     else if (d.assenza==='Ferie annuali') ferie++;
@@ -1159,10 +1191,10 @@ function generateDriverPDF(doc, name, startY) {
   doc.setFontSize(9); doc.setTextColor(41,53,96); doc.setFont(undefined,'bold');
   doc.text('Riepilogo', 14, y + 4);
   doc.setFont(undefined,'normal'); doc.setFontSize(8.5); doc.setTextColor(60,58,70);
-  doc.text(`Presente: ${p}   FLIXBUS: ${f}   Trasferta: ${t}   Riposo settimanale: ${riposo}   Malattia: ${malattia}   Ferie: ${ferie}`, 14, y + 10);
+  doc.text(`Presente: ${p}   FLIXBUS: ${f}   Trasferta: ${t}   SPINTA: ${sp}   Riposo settimanale: ${riposo}   Malattia: ${malattia}   Ferie: ${ferie}`, 14, y + 10);
   doc.text(`Permesso retribuito: ${dd.permessoTotal || 0}h   ROL: ${dd.rolTotal || 0}h`, 14, y + 16);
   doc.setFontSize(7.5); doc.setTextColor(185,31,122); doc.setFont(undefined,'italic');
-  doc.text('★ Domeniche e festivi evidenziati in rosa: le trasferte di questi giorni vengono retribuite con tariffa doppia.', 14, y + 23);
+  doc.text('★ Domeniche e festivi evidenziati in rosa: le trasferte di questi giorni valgono doppio (già conteggiate nel totale Trasferta).', 14, y + 23);
   doc.setFont(undefined,'normal');
   return y + 32;
 }
